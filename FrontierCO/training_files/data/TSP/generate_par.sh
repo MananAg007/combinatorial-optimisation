@@ -23,27 +23,9 @@ echo "Using TSP directory: $TSP_DIR"
 echo "Parameter files will be saved to: $PAR_DIR"
 echo "Results will be saved to: $RESULTS_DIR"
 
-# --- User choice for POPMUSIC ---
-echo ""
-echo "Choose solver configuration:"
-echo "1) Standard LKH configuration"
-echo "2) POPMUSIC configuration"
-read -p "Enter your choice (1 or 2): " choice
-
-case $choice in
-    1)
-        USE_POPMUSIC=false
-        echo "Using standard LKH configuration"
-        ;;
-    2)
-        USE_POPMUSIC=true
-        echo "Using POPMUSIC configuration"
-        ;;
-    *)
-        echo "Invalid choice. Using standard LKH configuration by default."
-        USE_POPMUSIC=false
-        ;;
-esac
+# Set default configuration to standard LKH
+USE_POPMUSIC=false
+echo "Using standard LKH configuration by default"
 
 # Create necessary directories
 mkdir -p "$PAR_DIR" "$RESULTS_DIR"
