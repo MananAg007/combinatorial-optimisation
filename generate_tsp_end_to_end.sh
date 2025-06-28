@@ -1,6 +1,13 @@
 #!/bin/bash
-# Script to generate TSP instances, solve them, and convert to DIFUSCO format
+#SBATCH --job-name=tsp_gen_solve
+#SBATCH --output=/home/mananaga/projects/logs/difusco/%j/difusco.out
+#SBATCH --error=/home/mananaga/projects/logs/difusco/%j/difusco.out
+#SBATCH --time=24:00:00
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=64
+#SBATCH --mem=32G
 
+# Script to generate TSP instances, solve them, and convert to DIFUSCO format
 
 set -e  # Exit on error
 source ~/.bashrc
@@ -22,6 +29,14 @@ TRAIN_INSTANCES=10000
 VALID_INSTANCES=1000
 TEST_INSTANCES=1000
 SEED=42
+
+# Parallelism - use SLURM allocated CPUs or default to 32 if not running in SLURM
+if [ -n "$SLURM_CPUS_PER_TASK" ]; then
+  PARALLEL=$SLURM_CPUS_PER_TASK
+else
+  PARALLEL=32  # Default to high parallelism if not in SLURM
+fi
+echo "Using parallelism: $PARALLEL"
 
 # Directory structure
 BASE_DATA_DIR="/home/mananaga/projects/data/difusco/TSP"
@@ -87,19 +102,19 @@ echo "Solving training instances..."
 bash "${FRONTIERCO_DIR}/training_files/data/TSP/solve.sh" \
   --instance-dir "${TRAIN_DIR}" \
   --lkh-path "${LKH_PATH}" \
-  --parallel 10
+  --parallel ${PARALLEL}
 
 echo "Solving validation instances..."
 bash "${FRONTIERCO_DIR}/training_files/data/TSP/solve.sh" \
   --instance-dir "${VALID_DIR}" \
   --lkh-path "${LKH_PATH}" \
-  --parallel 10
+  --parallel ${PARALLEL}
 
 echo "Solving test instances..."
 bash "${FRONTIERCO_DIR}/training_files/data/TSP/solve.sh" \
   --instance-dir "${TEST_DIR}" \
   --lkh-path "${LKH_PATH}" \
-  --parallel 10
+  --parallel ${PARALLEL}
 
 # ==================== Convert to DIFUSCO Format ====================
 echo "Converting training instances to DIFUSCO format..."
