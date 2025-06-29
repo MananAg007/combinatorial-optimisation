@@ -11,7 +11,7 @@
 
 set -e  # Exit on error
 source ~/.bashrc
-conda activate difusco
+conda activate difusco_2_fixed
 
 # ==================== Configuration ====================
 # Paths
@@ -23,9 +23,8 @@ SCRIPTS_DIR="/home/mananaga/projects/runscripts"
 LKH_PATH="/home/mananaga/projects/combinatorial-optimisation/FrontierCO/LKH-3.0.13/LKH"
 
 # Instance generation parameters
-MIN_NODES=1000
-MAX_NODES=1000
-TRAIN_INSTANCES=10000
+NUM_NODES=50
+TRAIN_INSTANCES=128000
 VALID_INSTANCES=1000
 TEST_INSTANCES=1000
 SEED=42
@@ -39,7 +38,7 @@ fi
 echo "Using parallelism: $PARALLEL"
 
 # Directory structure
-BASE_DATA_DIR="/home/mananaga/projects/data/difusco/TSP"
+BASE_DATA_DIR="/home/mananaga/projects/data/difusco/TSP/tsp${NUM_NODES}"
 TRAIN_DIR="${BASE_DATA_DIR}/train_instances"
 VALID_DIR="${BASE_DATA_DIR}/valid_instances"
 TEST_DIR="${BASE_DATA_DIR}/test_instances"
@@ -52,9 +51,9 @@ TEST_PAR_DIR="${BASE_DATA_DIR}/test_instances_par"
 
 # DIFUSCO converted data
 DIFUSCO_DATA_DIR="${BASE_DATA_DIR}/converted_frontierco"
-DIFUSCO_TRAIN="${DIFUSCO_DATA_DIR}/tsp1000_frontierco_train.txt"
-DIFUSCO_VALID="${DIFUSCO_DATA_DIR}/tsp1000_frontierco_valid.txt"
-DIFUSCO_TEST="${DIFUSCO_DATA_DIR}/tsp1000_frontierco_test.txt"
+DIFUSCO_TRAIN="${DIFUSCO_DATA_DIR}/tsp${NUM_NODES}_frontierco_train.txt"
+DIFUSCO_VALID="${DIFUSCO_DATA_DIR}/tsp${NUM_NODES}_frontierco_valid.txt"
+DIFUSCO_TEST="${DIFUSCO_DATA_DIR}/tsp${NUM_NODES}_frontierco_test.txt"
 
 # ==================== Setup ====================
 # Create directories
@@ -65,24 +64,24 @@ mkdir -p "${DIFUSCO_DATA_DIR}"
 # ==================== Generate TSP Instances ====================
 echo "Generating training instances..."
 python "${FRONTIERCO_DIR}/training_files/data/TSP/generate_training_instances.py" \
-  --min_nodes ${MIN_NODES} \
-  --max_nodes ${MAX_NODES} \
+  --min_nodes ${NUM_NODES} \
+  --max_nodes ${NUM_NODES} \
   --num_instances ${TRAIN_INSTANCES} \
   --seed ${SEED} \
   --output "${TRAIN_DIR}"
 
 echo "Generating validation instances..."
 python "${FRONTIERCO_DIR}/training_files/data/TSP/generate_training_instances.py" \
-  --min_nodes ${MIN_NODES} \
-  --max_nodes ${MAX_NODES} \
+  --min_nodes ${NUM_NODES} \
+  --max_nodes ${NUM_NODES} \
   --num_instances ${VALID_INSTANCES} \
   --seed $((SEED+1)) \
   --output "${VALID_DIR}"
 
 echo "Generating test instances..."
 python "${FRONTIERCO_DIR}/training_files/data/TSP/generate_training_instances.py" \
-  --min_nodes ${MIN_NODES} \
-  --max_nodes ${MAX_NODES} \
+  --min_nodes ${NUM_NODES} \
+  --max_nodes ${NUM_NODES} \
   --num_instances ${TEST_INSTANCES} \
   --seed $((SEED+2)) \
   --output "${TEST_DIR}"
@@ -122,18 +121,18 @@ python "${DIFUSCO_DIR}/convert_tsp_instances.py" \
   --instance_dir "${TRAIN_DIR}" \
   --solution_dir "${TRAIN_SOL_DIR}" \
   --output_dir "${DIFUSCO_DATA_DIR}" \
-  --output_file "tsp1000_frontierco_train.txt"
+  --output_file "tsp${NUM_NODES}_frontierco_train.txt"
 
 echo "Converting validation instances to DIFUSCO format..."
 python "${DIFUSCO_DIR}/convert_tsp_instances.py" \
   --instance_dir "${VALID_DIR}" \
   --solution_dir "${VALID_SOL_DIR}" \
   --output_dir "${DIFUSCO_DATA_DIR}" \
-  --output_file "tsp1000_frontierco_valid.txt"
+  --output_file "tsp${NUM_NODES}_frontierco_valid.txt"
 
 echo "Converting test instances to DIFUSCO format..."
 python "${DIFUSCO_DIR}/convert_tsp_instances.py" \
   --instance_dir "${TEST_DIR}" \
   --solution_dir "${TEST_SOL_DIR}" \
   --output_dir "${DIFUSCO_DATA_DIR}" \
-  --output_file "tsp1000_frontierco_test.txt"
+  --output_file "tsp${NUM_NODES}_frontierco_test.txt"
