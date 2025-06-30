@@ -1,0 +1,102 @@
+name: difusco_2_fixed
+channels:
+  - pyg            # ensures PyG wheels match torch exactly
+  - pytorch        # official PyTorch builds
+  - nvidia         # cudatoolkit-11.8 runtime (comment out for CPU-only)
+  - conda-forge
+  - defaults
+
+dependencies:
+  # ── core stack ──────────────────────────────────────────────────────────────
+  - python=3.10
+  - pytorch=2.3.*          # CPU build if you remove the next line
+  - pytorch-cuda=11.8      # ⇐ comment out for CPU-only environment
+  - torchvision=0.18.*
+  - torchaudio=2.3.*
+  - pyg=2.6.*              # pulls torch-scatter/sparse/… with matching ABI
+  - pytorch-lightning=2.3.*
+  - tensorboard            # pulls tb-data-server etc.
+
+  # ── scientific / numerics ───────────────────────────────────────────────────
+  - numpy
+  - scipy
+  - scikit-learn
+  - pandas
+  - imageio
+  - matplotlib
+  - networkx
+  - cython
+
+  # ── utilities & misc ────────────────────────────────────────────────────────
+  - tqdm
+  - gdown
+  - jinja2
+  - protobuf<=4.25  # avoid TF/Lightning incompatibilities
+  - pip
+
+  # ── pip-only add-ons ────────────────────────────────────────────────────────
+  - pip:
+      - absl-py
+      - aiohttp
+      - aiosignal
+      - appdirs
+      - async-timeout
+      - asynctest
+      - attrs
+      - beautifulsoup4
+      - cachetools
+      - charset-normalizer
+      - click
+      - deprecated
+      - docker-pycreds
+      - filelock
+      - fonttools
+      - fsspec
+      - gitdb
+      - gitpython
+      - google-auth
+      - google-auth-oauthlib
+      - grpcio
+      - idna
+      - joblib
+      - kiwisolver
+      - lightning-utilities
+      - lkh==1.1.1
+      - logzero
+      - markdown
+      - markupsafe
+      - multidict
+      - oauthlib
+      - opencv-python
+      - packaging
+      - pathtools
+      - pickle5
+      - pillow
+      - psutil
+      - pyasn1
+      - pyasn1-modules
+      - pydeprecate
+      - pyparsing
+      - pyrss2gen
+      - pysocks
+      - python-dateutil
+      - python-sat==0.1.7.dev25
+      - pyyaml
+      - requests
+      - requests-oauthlib
+      - rsa
+      - sentry-sdk
+      - setproctitle
+      - smmap
+      - soupsieve
+      - tabulate
+      - tensorboardx
+      - threadpoolctl
+      - torchmetrics
+      - tsplib95==0.7.1
+      - urllib3
+      - wandb==0.16.6
+      - werkzeug
+      - wrapt
+      - yarl
+      - zipp
