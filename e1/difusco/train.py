@@ -46,6 +46,11 @@ def arg_parser():
   parser.add_argument('--sequential_sampling', type=int, default=1)
   parser.add_argument('--parallel_sampling', type=int, default=1)
 
+  parser.add_argument('--train_constraint_weight', type=float, default=0.0,
+                      help="Weight for the tour constraint loss during training (0.0 = disabled)")
+  parser.add_argument('--sample_constraint_weight', type=float, default=0.0,
+                      help="Weight for enforcing tour constraints during sampling/inference (0.0 = disabled)")
+
   parser.add_argument('--n_layers', type=int, default=12)
   parser.add_argument('--hidden_dim', type=int, default=256)
   parser.add_argument('--sparse_factor', type=int, default=-1)

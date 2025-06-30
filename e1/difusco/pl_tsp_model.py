@@ -34,9 +34,49 @@ class TSPModel(COMetaModel):
         data_file=os.path.join(self.args.storage_path, self.args.validation_split),
         sparse_factor=self.args.sparse_factor,
     )
+    
+    # Separate weights for training and sampling
+    self.train_constraint_weight = getattr(param_args, 'train_constraint_weight', 0.0)
+    self.sample_constraint_weight = getattr(param_args, 'sample_constraint_weight', 0.0)
 
   def forward(self, x, adj, t, edge_index):
     return self.model(x, t, adj, edge_index)
+    
+  def tour_constraint_loss(self, adjacency_probs, t, max_timestep):
+    """
+    Compute a loss that encourages tour constraints (each node has exactly 1 incoming and 1 outgoing edge)
+    Args:
+        adjacency_probs: Predicted adjacency matrix probabilities [B, N, N, 2] where last dim is [0=no_edge, 1=edge]
+        t: Current timestep
+        max_timestep: Maximum timestep for scaling the constraint weight
+    Returns:
+        Loss that penalizes deviations from the tour constraint
+    """
+    if self.train_constraint_weight <= 0:
+        return 0.0
+        
+    # Extract edge probability (class 1)
+    edge_probs = adjacency_probs[..., 1]
+    batch_size, num_nodes, _ = edge_probs.shape
+    
+    # Calculate row sums (outgoing edges per node)
+    row_sums = edge_probs.sum(dim=2)  # [B, N]
+    
+    # Calculate column sums (incoming edges per node)
+    col_sums = edge_probs.sum(dim=1)  # [B, N]
+    
+    # Each node should have exactly 1 incoming and 1 outgoing edge
+    # Penalize deviations from this constraint
+    row_loss = F.mse_loss(row_sums, torch.ones_like(row_sums))
+    col_loss = F.mse_loss(col_sums, torch.ones_like(col_sums))
+    
+    # Scale loss weight based on diffusion progress (t/max_timestep)
+    # More strict enforcement as t approaches 0
+    progress = 1.0 - (t.float().mean() / max_timestep)
+    scaled_weight = self.train_constraint_weight * progress
+    
+    loss = scaled_weight * (row_loss + col_loss)
+    return loss
 
   def categorical_training_step(self, batch, batch_idx):
     edge_index = None
@@ -80,10 +120,26 @@ class TSPModel(COMetaModel):
         edge_index,
     )
 
-    # Compute loss
+    # Compute reconstruction loss
     loss_func = nn.CrossEntropyLoss()
-    loss = loss_func(x0_pred, adj_matrix.long())
+    recon_loss = loss_func(x0_pred, adj_matrix.long())
+    
+    # Compute tour constraint loss (for dense mode only)
+    tour_loss = 0.0
+    if not self.sparse and self.train_constraint_weight > 0:
+        # Reshape x0_pred to get the probability of each edge
+        x0_pred_prob = x0_pred.permute((0, 2, 3, 1)).contiguous().softmax(dim=-1)
+        tour_loss = self.tour_constraint_loss(x0_pred_prob, t, self.diffusion.T)
+        
+    # Combine losses
+    loss = recon_loss + tour_loss
+    
+    # Log losses
+    self.log("train/recon_loss", recon_loss)
+    if tour_loss > 0:
+        self.log("train/tour_loss", tour_loss)
     self.log("train/loss", loss)
+    
     return loss
 
   def gaussian_training_step(self, batch, batch_idx):
@@ -119,6 +175,40 @@ class TSPModel(COMetaModel):
     elif self.diffusion_type == 'categorical':
       return self.categorical_training_step(batch, batch_idx)
 
+  def apply_tour_constraints(self, x0_pred_prob, strength=1.0):
+    """
+    Apply tour constraints to the predicted probabilities
+    Args:
+        x0_pred_prob: Predicted adjacency matrix probabilities [B, N, N, 2]
+        strength: Strength of the constraint (0.0 = no effect, 1.0 = full effect)
+    Returns:
+        Modified prediction that better satisfies tour constraints
+    """
+    if strength <= 0 or self.sparse:
+        return x0_pred_prob
+        
+    # Work with edge probabilities (class 1)
+    edge_probs = x0_pred_prob[..., 1].clone()
+    batch_size, num_nodes, _ = edge_probs.shape
+    
+    # Normalize rows (outgoing edges) - each node should have EXACTLY ONE outgoing edge
+    row_sums = edge_probs.sum(dim=2, keepdim=True).clamp(min=1e-6)
+    normalized_rows = edge_probs / row_sums
+    
+    # Normalize columns (incoming edges) - each node should have EXACTLY ONE incoming edge
+    col_sums = edge_probs.sum(dim=1, keepdim=True).clamp(min=1e-6)
+    normalized_cols = edge_probs / col_sums.transpose(1, 2)
+    
+    # Combine normalizations with original probabilities
+    adjusted_probs = edge_probs * (1 - strength) + (normalized_rows + normalized_cols) * strength * 0.5
+    
+    # Update the probability tensor
+    result = x0_pred_prob.clone()
+    result[..., 1] = adjusted_probs
+    result[..., 0] = 1.0 - adjusted_probs
+    
+    return result
+
   def categorical_denoise_step(self, points, xt, t, device, edge_index=None, target_t=None):
     with torch.no_grad():
       t = torch.from_numpy(t).view(1)
@@ -131,6 +221,12 @@ class TSPModel(COMetaModel):
 
       if not self.sparse:
         x0_pred_prob = x0_pred.permute((0, 2, 3, 1)).contiguous().softmax(dim=-1)
+        
+        # Apply tour constraints with increasing strength as t approaches 0
+        if self.sample_constraint_weight > 0:
+            progress = 1.0 - (t.float().item() / self.diffusion.T)
+            constraint_strength = progress * self.sample_constraint_weight
+            x0_pred_prob = self.apply_tour_constraints(x0_pred_prob, strength=constraint_strength)
       else:
         x0_pred_prob = x0_pred.reshape((1, points.shape[0], -1, 2)).softmax(dim=-1)
 
