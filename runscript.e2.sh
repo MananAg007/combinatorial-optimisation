@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=dfco.e2
+#SBATCH --job-name=co.e2.fs
 #SBATCH --output=/home/mananaga/projects/logs/difusco/%j/difusco.out
 #SBATCH --error=/home/mananaga/projects/logs/difusco/%j/difusco.out
 #SBATCH --time=72:00:00
