@@ -45,6 +45,17 @@ def arg_parser():
   parser.add_argument('--inference_trick', type=str, default="ddim")
   parser.add_argument('--sequential_sampling', type=int, default=1)
   parser.add_argument('--parallel_sampling', type=int, default=1)
+  
+  # Diffusion forcing parameters
+  parser.add_argument('--use_diffusion_forcing', action='store_true', 
+                      help='Whether to use diffusion forcing token-wise denoising')
+  parser.add_argument('--scheduling_matrix_type', type=str, default='pyramid',
+                      choices=['pyramid', 'autoregressive', 'full_sequence'],
+                      help='Type of scheduling matrix for diffusion forcing')
+  parser.add_argument('--uncertainty_scale', type=float, default=1.0,
+                      help='Uncertainty scale for pyramid scheduling in diffusion forcing')
+  parser.add_argument('--chunk_size', type=int, default=0,
+                      help='Chunk size for token-wise denoising (0 means use full sequence)')
 
   parser.add_argument('--n_layers', type=int, default=12)
   parser.add_argument('--hidden_dim', type=int, default=256)

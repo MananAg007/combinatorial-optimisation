@@ -57,6 +57,10 @@ python -u difusco/train.py \
   --wandb_logger_name "tsp_diffusion_graph_categorical_tsp${NUM_NODES}_frontierco" \
   --wandb_entity "mananaga-carnegie-mellon-university" \
   --diffusion_type "categorical" \
+  --use_diffusion_forcing \
+  --scheduling_matrix_type "full_sequence" \
+  --uncertainty_scale 1.0 \
+  --chunk_size 0 \
   --do_train \
   --learning_rate 0.0002 \
   --weight_decay 0.0001 \

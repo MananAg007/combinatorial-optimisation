@@ -44,7 +44,7 @@ class GaussianDiffusion(object):
 
 
 class CategoricalDiffusion(object):
-  """Gaussian Diffusion process with linear beta scheduling"""
+  """Categorical Diffusion process with linear beta scheduling"""
 
   def __init__(self, T, schedule):
     # Diffusion steps
@@ -80,6 +80,68 @@ class CategoricalDiffusion(object):
     Q_bar = torch.from_numpy(self.Q_bar[t]).float().to(x0_onehot.device)
     xt = torch.matmul(x0_onehot, Q_bar.reshape((Q_bar.shape[0], 1, 2, 2)))
     return torch.bernoulli(xt[..., 1].clamp(0, 1))
+
+
+class DiffusionForcing:
+  """Helper class to implement token-wise denoising schedules from diffusion-forcing paper."""
+  
+  def __init__(self, T):
+    """Initialize the diffusion forcing scheduler.
+    
+    Args:
+      T: The total number of diffusion steps
+    """
+    self.T = T
+    
+  def generate_pyramid_scheduling_matrix(self, horizon, uncertainty_scale):
+    """Generate a pyramid scheduling matrix for token-wise denoising.
+    
+    This creates a schedule that progressively denoises tokens from left to right
+    with an uncertainty scale that determines how many timesteps to wait
+    before denoising the next token.
+    
+    Args:
+      horizon: The number of tokens to denoise
+      uncertainty_scale: Higher values mean more tokens are denoised jointly
+                         Lower values approach autoregressive denoising
+    
+    Returns:
+      A scheduling matrix of shape (height, horizon) where each row represents
+      a timestep and each column represents a token
+    """
+    height = self.T + int((horizon - 1) * uncertainty_scale) + 1
+    scheduling_matrix = np.zeros((height, horizon), dtype=np.int64)
+    for m in range(height):
+      for t in range(horizon):
+        scheduling_matrix[m, t] = self.T + int(t * uncertainty_scale) - m
+    
+    return np.clip(scheduling_matrix, 0, self.T)
+  
+  def generate_autoregressive_scheduling_matrix(self, horizon):
+    """Generate a scheduling matrix for fully autoregressive denoising.
+    
+    This is equivalent to a pyramid schedule with uncertainty_scale = T
+    
+    Args:
+      horizon: The number of tokens to denoise
+    
+    Returns:
+      A scheduling matrix for autoregressive denoising
+    """
+    return self.generate_pyramid_scheduling_matrix(horizon, self.T)
+  
+  def generate_full_sequence_scheduling_matrix(self, horizon):
+    """Generate a scheduling matrix for full sequence denoising.
+    
+    All tokens are denoised simultaneously in this schedule.
+    
+    Args:
+      horizon: The number of tokens to denoise
+    
+    Returns:
+      A scheduling matrix for full sequence denoising
+    """
+    return np.arange(self.T, -1, -1)[:, None].repeat(horizon, axis=1)
 
 
 class InferenceSchedule(object):

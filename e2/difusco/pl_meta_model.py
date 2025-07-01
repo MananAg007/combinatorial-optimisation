@@ -10,7 +10,7 @@ from pytorch_lightning.utilities import rank_zero_info
 
 from models.gnn_encoder import GNNEncoder
 from utils.lr_schedulers import get_schedule_fn
-from utils.diffusion_schedulers import CategoricalDiffusion, GaussianDiffusion
+from utils.diffusion_schedulers import CategoricalDiffusion, GaussianDiffusion, DiffusionForcing
 
 
 class COMetaModel(pl.LightningModule):
@@ -23,6 +23,12 @@ class COMetaModel(pl.LightningModule):
     self.diffusion_schedule = self.args.diffusion_schedule
     self.diffusion_steps = self.args.diffusion_steps
     self.sparse = self.args.sparse_factor > 0 or node_feature_only
+    
+    # Diffusion forcing parameters
+    self.use_diffusion_forcing = getattr(self.args, 'use_diffusion_forcing', False)
+    self.scheduling_matrix_type = getattr(self.args, 'scheduling_matrix_type', 'pyramid')
+    self.uncertainty_scale = getattr(self.args, 'uncertainty_scale', 1.0)
+    self.chunk_size = getattr(self.args, 'chunk_size', 0)  # 0 means full sequence
 
     if self.diffusion_type == 'gaussian':
       out_channels = 1
@@ -32,6 +38,10 @@ class COMetaModel(pl.LightningModule):
       out_channels = 2
       self.diffusion = CategoricalDiffusion(
           T=self.diffusion_steps, schedule=self.diffusion_schedule)
+      
+      # Initialize diffusion forcing scheduler if enabled
+      if self.use_diffusion_forcing:
+        self.diffusion_forcing = DiffusionForcing(T=self.diffusion_steps)
     else:
       raise ValueError(f"Unknown diffusion type {self.diffusion_type}")
 
@@ -98,6 +108,20 @@ class COMetaModel(pl.LightningModule):
               "interval": "step",
           },
       }
+
+  def generate_scheduling_matrix(self, horizon):
+    """Generate the scheduling matrix for token-wise denoising based on the configuration."""
+    if not hasattr(self, 'diffusion_forcing'):
+      return None
+    
+    if self.scheduling_matrix_type == 'pyramid':
+      return self.diffusion_forcing.generate_pyramid_scheduling_matrix(horizon, self.uncertainty_scale)
+    elif self.scheduling_matrix_type == 'autoregressive':
+      return self.diffusion_forcing.generate_autoregressive_scheduling_matrix(horizon)
+    elif self.scheduling_matrix_type == 'full_sequence':
+      return self.diffusion_forcing.generate_full_sequence_scheduling_matrix(horizon)
+    else:
+      raise ValueError(f"Unknown scheduling matrix type: {self.scheduling_matrix_type}")
 
   def categorical_posterior(self, target_t, t, x0_pred_prob, xt):
     """Sample from the categorical posterior for a given time step.

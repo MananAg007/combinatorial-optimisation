@@ -58,19 +58,35 @@ class TSPModel(COMetaModel):
     if self.sparse:
       adj_matrix_onehot = adj_matrix_onehot.unsqueeze(1)
 
+    # Use diffusion forcing for training if enabled
+    if self.use_diffusion_forcing:
+      # For diffusion forcing, we can use random noise levels for each token instead of uniform noise
+      if not self.sparse:
+        batch_size, h, w = adj_matrix.shape
+        t = np.random.randint(1, self.diffusion.T + 1, (batch_size, h, w)).astype(int)
+      else:
+        t = np.random.randint(1, self.diffusion.T + 1, adj_matrix.shape[0] * adj_matrix.shape[1]).astype(int)
+    
+    # Sample from diffusion process
     xt = self.diffusion.sample(adj_matrix_onehot, t)
     xt = xt * 2 - 1
     xt = xt * (1.0 + 0.05 * torch.rand_like(xt))
 
     if self.sparse:
       t = torch.from_numpy(t).float()
-      t = t.reshape(-1, 1).repeat(1, adj_matrix.shape[1]).reshape(-1)
+      if self.use_diffusion_forcing:
+        t = t.reshape(-1)
+      else:
+        t = t.reshape(-1, 1).repeat(1, adj_matrix.shape[1]).reshape(-1)
       xt = xt.reshape(-1)
       adj_matrix = adj_matrix.reshape(-1)
       points = points.reshape(-1, 2)
       edge_index = edge_index.float().to(adj_matrix.device).reshape(2, -1)
     else:
-      t = torch.from_numpy(t).float().view(adj_matrix.shape[0])
+      if self.use_diffusion_forcing:
+        t = torch.from_numpy(t).float().reshape(adj_matrix.shape)
+      else:
+        t = torch.from_numpy(t).float().view(adj_matrix.shape[0])
 
     # Denoise
     x0_pred = self.forward(
@@ -199,22 +215,83 @@ class TSPModel(COMetaModel):
       if self.sparse:
         xt = xt.reshape(-1)
 
-      steps = self.args.inference_diffusion_steps
-      time_schedule = InferenceSchedule(inference_schedule=self.args.inference_schedule,
-                                        T=self.diffusion.T, inference_T=steps)
-
-      # Diffusion iterations
-      for i in range(steps):
-        t1, t2 = time_schedule(i)
-        t1 = np.array([t1]).astype(int)
-        t2 = np.array([t2]).astype(int)
-
-        if self.diffusion_type == 'gaussian':
-          xt = self.gaussian_denoise_step(
-              points, xt, t1, device, edge_index, target_t=t2)
+      # Use diffusion forcing if enabled
+      if self.use_diffusion_forcing and self.diffusion_type == 'categorical':
+        # Determine the horizon (number of tokens)
+        if self.sparse:
+          horizon = xt.shape[0]
         else:
-          xt = self.categorical_denoise_step(
-              points, xt, t1, device, edge_index, target_t=t2)
+          horizon = xt.shape[1] * xt.shape[2]  # Flatten the adjacency matrix
+        
+        # Use chunk size if specified, otherwise use full horizon
+        chunk_size = min(horizon, self.chunk_size) if self.chunk_size > 0 else horizon
+        
+        # Generate scheduling matrix based on the configuration
+        scheduling_matrix = self.generate_scheduling_matrix(chunk_size)
+        
+        # Apply token-wise denoising
+        for m in range(scheduling_matrix.shape[0] - 1):
+          from_noise_levels = scheduling_matrix[m]
+          to_noise_levels = scheduling_matrix[m + 1]
+          
+          from_noise_levels = torch.from_numpy(from_noise_levels).long().to(device)
+          to_noise_levels = torch.from_numpy(to_noise_levels).long().to(device)
+          
+          # Process tokens by their noise levels
+          for token_idx in range(chunk_size):
+            if from_noise_levels[token_idx] > to_noise_levels[token_idx]:
+              # Only process if this token's noise level is changing
+              t1 = from_noise_levels[token_idx].view(1).cpu().numpy()
+              t2 = to_noise_levels[token_idx].view(1).cpu().numpy()
+              
+              # Prepare a mask for this token
+              token_mask = torch.zeros_like(xt, dtype=torch.bool)
+              if self.sparse:
+                token_mask[token_idx] = True
+              else:
+                # Flatten and then reshape back
+                flat_idx = token_idx
+                row = flat_idx // xt.shape[2]
+                col = flat_idx % xt.shape[2]
+                token_mask[0, row, col] = True
+              
+              # Only denoise this token
+              with torch.no_grad():
+                x0_pred = self.forward(
+                    points.float().to(device),
+                    xt.float().to(device),
+                    torch.tensor([t1], dtype=torch.float, device=device),
+                    edge_index.long().to(device) if edge_index is not None else None,
+                )
+                
+                if not self.sparse:
+                  x0_pred_prob = x0_pred.permute((0, 2, 3, 1)).contiguous().softmax(dim=-1)
+                else:
+                  x0_pred_prob = x0_pred.reshape((1, points.shape[0], -1, 2)).softmax(dim=-1)
+                
+                # Get posterior for this token only
+                new_xt = self.categorical_posterior(t2, t1, x0_pred_prob, xt)
+                
+                # Update only this token
+                xt = torch.where(token_mask, new_xt, xt)
+      else:
+        # Original diffusion process
+        steps = self.args.inference_diffusion_steps
+        time_schedule = InferenceSchedule(inference_schedule=self.args.inference_schedule,
+                                          T=self.diffusion.T, inference_T=steps)
+
+        # Diffusion iterations
+        for i in range(steps):
+          t1, t2 = time_schedule(i)
+          t1 = np.array([t1]).astype(int)
+          t2 = np.array([t2]).astype(int)
+
+          if self.diffusion_type == 'gaussian':
+            xt = self.gaussian_denoise_step(
+                points, xt, t1, device, edge_index, target_t=t2)
+          else:
+            xt = self.categorical_denoise_step(
+                points, xt, t1, device, edge_index, target_t=t2)
 
       if self.diffusion_type == 'gaussian':
         adj_mat = xt.cpu().detach().numpy() * 0.5 + 0.5
