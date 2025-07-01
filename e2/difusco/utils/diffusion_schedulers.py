@@ -71,6 +71,9 @@ class CategoricalDiffusion(object):
       Q_bar.append(Q_bar[-1] @ Q)
     self.Q_bar = np.stack(Q_bar, axis=0)
 
+    self.Q_bar_torch = torch.from_numpy(self.Q_bar).float()
+    self.Q_bar_inv_torch = torch.linalg.inv(self.Q_bar_torch)
+
   def __cos_noise(self, t):
     offset = 0.008
     return np.cos(math.pi * 0.5 * (t / self.T + offset) / (1 + offset)) ** 2

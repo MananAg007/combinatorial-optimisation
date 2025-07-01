@@ -265,13 +265,12 @@ class TSPModel(COMetaModel):
                 x0_pred_prob = x0_pred.reshape((1, points.shape[0], -1, 2)).softmax(dim=-1)
               
               # Use batch categorical posterior for correct handling of different noise levels
-              new_xt = self.categorical_posterior_batch(
-                  to_noise_levels,
-                  from_noise_levels,
-                  x0_pred_prob,
+              new_xt = self.categorical_posterior_vectorised(
                   xt,
+                  x0_pred_prob,
                   tokens_to_update,
-                  is_sparse=self.sparse
+                  from_noise_levels,
+                  to_noise_levels
               )
               
               # No need for torch.where since categorical_posterior_batch updates only the specified tokens
