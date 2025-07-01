@@ -238,42 +238,38 @@ class TSPModel(COMetaModel):
           to_noise_levels = torch.from_numpy(to_noise_levels).long().to(device)
           
           # Process tokens by their noise levels
-          for token_idx in range(chunk_size):
-            if from_noise_levels[token_idx] > to_noise_levels[token_idx]:
-              # Only process if this token's noise level is changing
-              t1 = from_noise_levels[token_idx].view(1).cpu().numpy()
-              t2 = to_noise_levels[token_idx].view(1).cpu().numpy()
+          # Find tokens that need to be updated (noise level is changing)
+          update_mask = from_noise_levels > to_noise_levels
+          tokens_to_update = torch.nonzero(update_mask).view(-1)
+          
+          if tokens_to_update.numel() > 0:
+            # Only run the model if there are tokens to update
+            with torch.no_grad():
+              # Run the model once for this step
+              x0_pred = self.forward(
+                  points.float().to(device),
+                  xt.float().to(device),
+                  torch.tensor([from_noise_levels[0]], dtype=torch.float, device=device),  # Use any noise level
+                  edge_index.long().to(device) if edge_index is not None else None,
+              )
               
-              # Prepare a mask for this token
-              token_mask = torch.zeros_like(xt, dtype=torch.bool)
-              if self.sparse:
-                token_mask[token_idx] = True
+              if not self.sparse:
+                x0_pred_prob = x0_pred.permute((0, 2, 3, 1)).contiguous().softmax(dim=-1)
               else:
-                # Flatten and then reshape back
-                flat_idx = token_idx
-                row = flat_idx // xt.shape[2]
-                col = flat_idx % xt.shape[2]
-                token_mask[0, row, col] = True
+                x0_pred_prob = x0_pred.reshape((1, points.shape[0], -1, 2)).softmax(dim=-1)
               
-              # Only denoise this token
-              with torch.no_grad():
-                x0_pred = self.forward(
-                    points.float().to(device),
-                    xt.float().to(device),
-                    torch.tensor([t1], dtype=torch.float, device=device),
-                    edge_index.long().to(device) if edge_index is not None else None,
-                )
-                
-                if not self.sparse:
-                  x0_pred_prob = x0_pred.permute((0, 2, 3, 1)).contiguous().softmax(dim=-1)
-                else:
-                  x0_pred_prob = x0_pred.reshape((1, points.shape[0], -1, 2)).softmax(dim=-1)
-                
-                # Get posterior for this token only
-                new_xt = self.categorical_posterior(t2, t1, x0_pred_prob, xt)
-                
-                # Update only this token
-                xt = torch.where(token_mask, new_xt, xt)
+              # Use batch categorical posterior for correct handling of different noise levels
+              new_xt = self.categorical_posterior_batch(
+                  to_noise_levels,
+                  from_noise_levels,
+                  x0_pred_prob,
+                  xt,
+                  tokens_to_update,
+                  is_sparse=self.sparse
+              )
+              
+              # No need for torch.where since categorical_posterior_batch updates only the specified tokens
+              xt = new_xt
       else:
         # Original diffusion process
         steps = self.args.inference_diffusion_steps

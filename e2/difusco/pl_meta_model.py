@@ -169,6 +169,88 @@ class COMetaModel(pl.LightningModule):
       xt = xt.reshape(-1)
     return xt
 
+  def categorical_posterior_batch(self, to_noise_levels, from_noise_levels, x0_pred_prob, xt, token_indices, is_sparse=False):
+    """Sample from the categorical posterior for multiple tokens with different noise levels.
+    
+    Args:
+      to_noise_levels: Target noise levels for each token (tensor)
+      from_noise_levels: Source noise levels for each token (tensor)
+      x0_pred_prob: Predicted probabilities for clean state (output of model after softmax)
+      xt: Current noisy state
+      token_indices: Indices of tokens to update
+      is_sparse: Whether using sparse representation
+    
+    Returns:
+      Updated xt with only the specified tokens updated
+    """
+    diffusion = self.diffusion
+    device = xt.device
+    new_xt = xt.clone()
+    
+    # Convert xt to one-hot representation
+    xt_onehot = F.one_hot(xt.long(), num_classes=2).float()
+    if not is_sparse:
+      xt_shape = xt_onehot.shape
+      xt_onehot = xt_onehot.reshape(x0_pred_prob.shape)
+    
+    # Process each token with its specific noise levels
+    for idx in token_indices:
+      t1 = from_noise_levels[idx].item()
+      t2 = to_noise_levels[idx].item()
+      
+      # Get token position
+      if is_sparse:
+        pos = idx
+      else:
+        # For dense representation, calculate 2D position
+        row = idx // xt.shape[2]
+        col = idx % xt.shape[2]
+        pos = (0, row, col)
+      
+      # Get transition matrices for this specific noise transition
+      Q_t = np.linalg.inv(diffusion.Q_bar[t2]) @ diffusion.Q_bar[t1]
+      Q_t = torch.from_numpy(Q_t).float().to(device)
+      
+      Q_bar_t_source = torch.from_numpy(diffusion.Q_bar[t1]).float().to(device)
+      Q_bar_t_target = torch.from_numpy(diffusion.Q_bar[t2]).float().to(device)
+      
+      # Extract token-specific data
+      token_xt = xt_onehot[pos] if isinstance(pos, tuple) else xt_onehot[pos]
+      token_pred = x0_pred_prob[pos] if isinstance(pos, tuple) else x0_pred_prob[pos]
+      
+      # Ensure token_xt has the right shape [1, 2] for matrix operations
+      if token_xt.dim() == 1:
+        token_xt = token_xt.unsqueeze(0)
+      
+      # Calculate posterior for this specific token
+      x_t_target_prob_part_1 = torch.matmul(token_xt, Q_t.permute((1, 0)).contiguous())
+      x_t_target_prob_part_2 = Q_bar_t_target[0]
+      x_t_target_prob_part_3 = (Q_bar_t_source[0] * token_xt).sum(dim=-1, keepdim=True)
+      
+      x_t_target_prob = (x_t_target_prob_part_1 * x_t_target_prob_part_2) / x_t_target_prob_part_3
+      
+      sum_x_t_target_prob = x_t_target_prob[..., 1] * token_pred[..., 0]
+      x_t_target_prob_part_2_new = Q_bar_t_target[1]
+      x_t_target_prob_part_3_new = (Q_bar_t_source[1] * token_xt).sum(dim=-1, keepdim=True)
+      
+      x_t_source_prob_new = (x_t_target_prob_part_1 * x_t_target_prob_part_2_new) / x_t_target_prob_part_3_new
+      
+      sum_x_t_target_prob += x_t_source_prob_new[..., 1] * token_pred[..., 1]
+      
+      # Sample new token value
+      if t2 > 0:
+        new_token_val = torch.bernoulli(sum_x_t_target_prob.clamp(0, 1))
+      else:
+        new_token_val = sum_x_t_target_prob.clamp(min=0)
+      
+      # Update the token in new_xt
+      if is_sparse:
+        new_xt[pos] = new_token_val
+      else:
+        new_xt[pos] = new_token_val
+    
+    return new_xt
+
   def gaussian_posterior(self, target_t, t, pred, xt):
     """Sample (or deterministically denoise) from the Gaussian posterior for a given time step.
        See https://arxiv.org/pdf/2010.02502.pdf for details.
