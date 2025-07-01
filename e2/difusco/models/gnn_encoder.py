@@ -360,7 +360,19 @@ class GNNEncoder(nn.Module):
     # Embed edge features
     del edge_index
     x = self.node_embed(self.pos_embed(x))
-    e = self.edge_embed(self.edge_pos_embed(graph))
+
+
+    # Accept both one-hot and plain mask
+    if graph.dim() == 4 and graph.size(-1) == 2:        # one-hot
+      edge_mask = graph[..., 1]                       # take “edge present” channel
+    elif graph.dim() == 3:                              # already a mask
+      edge_mask = graph
+    else:
+      raise ValueError(f"Unexpected graph shape {graph.shape}")
+
+    e = self.edge_embed(self.edge_pos_embed(edge_mask))
+
+    #e = self.edge_embed(self.edge_pos_embed(graph))
     time_emb = self.time_embed(timestep_embedding(timesteps, self.hidden_dim))
     graph = torch.ones_like(graph).long()
 
