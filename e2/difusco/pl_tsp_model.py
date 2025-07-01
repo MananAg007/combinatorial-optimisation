@@ -170,6 +170,7 @@ class TSPModel(COMetaModel):
     edge_index = None
     np_edge_index = None
     device = batch[-1].device
+    
     if not self.sparse:
       real_batch_idx, points, adj_matrix, gt_tour = batch
       np_points = points.cpu().numpy()[0]
@@ -221,7 +222,12 @@ class TSPModel(COMetaModel):
         if self.sparse:
           horizon = xt.shape[0]
         else:
-          horizon = xt.shape[1] * xt.shape[2]  # Flatten the adjacency matrix
+          # For 3D tensor [batch, height, width]
+          if len(xt.shape) == 3:
+            batch_size, height, width = xt.shape
+            horizon = height * width  # Total number of elements in a single batch
+          else:
+            horizon = xt.shape[1] * xt.shape[2]  # Flatten the adjacency matrix
         
         # Use chunk size if specified, otherwise use full horizon
         chunk_size = min(horizon, self.chunk_size) if self.chunk_size > 0 else horizon
@@ -307,6 +313,7 @@ class TSPModel(COMetaModel):
       solved_tours, ns = batched_two_opt_torch(
           np_points.astype("float64"), np.array(tours).astype('int64'),
           max_iterations=self.args.two_opt_iterations, device=device)
+      
       stacked_tours.append(solved_tours)
 
     solved_tours = np.concatenate(stacked_tours, axis=0)
@@ -326,6 +333,7 @@ class TSPModel(COMetaModel):
     for k, v in metrics.items():
       self.log(k, v, on_epoch=True, sync_dist=True)
     self.log(f"{split}/solved_cost", best_solved_cost, prog_bar=True, on_epoch=True, sync_dist=True)
+    
     return metrics
 
   def run_save_numpy_heatmap(self, adj_mat, np_points, real_batch_idx, split):

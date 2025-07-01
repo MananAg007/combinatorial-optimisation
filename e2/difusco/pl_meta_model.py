@@ -7,6 +7,7 @@ import torch.nn.functional as F
 import torch.utils.data
 from torch_geometric.data import DataLoader as GraphDataLoader
 from pytorch_lightning.utilities import rank_zero_info
+import time
 
 from models.gnn_encoder import GNNEncoder
 from utils.lr_schedulers import get_schedule_fn
@@ -185,69 +186,164 @@ class COMetaModel(pl.LightningModule):
     """
     diffusion = self.diffusion
     device = xt.device
-    new_xt = xt.clone()
     
-    # Convert xt to one-hot representation
-    xt_onehot = F.one_hot(xt.long(), num_classes=2).float()
-    if not is_sparse:
-      xt_shape = xt_onehot.shape
-      xt_onehot = xt_onehot.reshape(x0_pred_prob.shape)
-    
-    # Process each token with its specific noise levels
-    for idx in token_indices:
-      t1 = from_noise_levels[idx].item()
-      t2 = to_noise_levels[idx].item()
-      
-      # Get token position
-      if is_sparse:
-        pos = idx
-      else:
-        # For dense representation, calculate 2D position
-        row = idx // xt.shape[2]
-        col = idx % xt.shape[2]
-        pos = (0, row, col)
-      
-      # Get transition matrices for this specific noise transition
-      Q_t = np.linalg.inv(diffusion.Q_bar[t2]) @ diffusion.Q_bar[t1]
-      Q_t = torch.from_numpy(Q_t).float().to(device)
-      
-      Q_bar_t_source = torch.from_numpy(diffusion.Q_bar[t1]).float().to(device)
-      Q_bar_t_target = torch.from_numpy(diffusion.Q_bar[t2]).float().to(device)
-      
-      # Extract token-specific data
-      token_xt = xt_onehot[pos] if isinstance(pos, tuple) else xt_onehot[pos]
-      token_pred = x0_pred_prob[pos] if isinstance(pos, tuple) else x0_pred_prob[pos]
-      
-      # Ensure token_xt has the right shape [1, 2] for matrix operations
-      if token_xt.dim() == 1:
-        token_xt = token_xt.unsqueeze(0)
-      
-      # Calculate posterior for this specific token
-      x_t_target_prob_part_1 = torch.matmul(token_xt, Q_t.permute((1, 0)).contiguous())
-      x_t_target_prob_part_2 = Q_bar_t_target[0]
-      x_t_target_prob_part_3 = (Q_bar_t_source[0] * token_xt).sum(dim=-1, keepdim=True)
-      
-      x_t_target_prob = (x_t_target_prob_part_1 * x_t_target_prob_part_2) / x_t_target_prob_part_3
-      
-      sum_x_t_target_prob = x_t_target_prob[..., 1] * token_pred[..., 0]
-      x_t_target_prob_part_2_new = Q_bar_t_target[1]
-      x_t_target_prob_part_3_new = (Q_bar_t_source[1] * token_xt).sum(dim=-1, keepdim=True)
-      
-      x_t_source_prob_new = (x_t_target_prob_part_1 * x_t_target_prob_part_2_new) / x_t_target_prob_part_3_new
-      
-      sum_x_t_target_prob += x_t_source_prob_new[..., 1] * token_pred[..., 1]
-      
-      # Sample new token value
-      if t2 > 0:
-        new_token_val = torch.bernoulli(sum_x_t_target_prob.clamp(0, 1))
-      else:
-        new_token_val = sum_x_t_target_prob.clamp(min=0)
-      
-      # Update the token in new_xt
-      if is_sparse:
-        new_xt[pos] = new_token_val
-      else:
-        new_xt[pos] = new_token_val
+    # Make a copy of the tensor for updates
+    if not is_sparse and len(xt.shape) > 1:
+        # For a multi-dimensional tensor, we need to preserve the shape
+        new_xt = xt.clone()
+        
+        # Get the dimensions for flattening/unflattening
+        if len(xt.shape) == 3:  # Typical case for TSP: [batch, height, width]
+            batch_size, height, width = xt.shape
+            
+            # Convert xt to one-hot representation
+            xt_onehot = F.one_hot(xt.long(), num_classes=2).float()
+            # For a 3D tensor, reshape but preserve batch dimension
+            xt_onehot_reshaped = xt_onehot.reshape(batch_size, height * width, 2)
+            
+            # Process each token with its specific noise levels
+            valid_updates = 0
+            
+            for idx in token_indices:
+                idx_item = idx.item()
+                
+                # Skip invalid indices
+                if idx_item >= height * width:
+                    continue
+                
+                t1 = from_noise_levels[idx_item].item()
+                t2 = to_noise_levels[idx_item].item()
+                
+                # If both noise levels are the same, skip this token
+                if t1 == t2:
+                    continue
+                
+                # Get Q matrices for this token's specific noise levels
+                if t2 > 0:
+                    Q_t = np.linalg.inv(diffusion.Q_bar[t2]) @ diffusion.Q_bar[t1]
+                    Q_t = torch.from_numpy(Q_t).float().to(device)
+                else:
+                    Q_t = torch.eye(2).float().to(device)
+                
+                Q_bar_t_source = torch.from_numpy(diffusion.Q_bar[t1]).float().to(device)
+                Q_bar_t_target = torch.from_numpy(diffusion.Q_bar[t2]).float().to(device)
+                
+                # Convert flattened index to 2D position
+                row = idx_item // width
+                col = idx_item % width
+                
+                # Get the token value and prediction for this position
+                # We need to get from the batch dimension (typically 0 for inference)
+                batch_idx = 0  # Usually only one batch in inference
+                
+                xt_token = xt_onehot_reshaped[batch_idx, idx_item].unsqueeze(0)
+                
+                # Get prediction from the correct shape
+                # If x0_pred_prob is in [batch, h, w, classes] format
+                if len(x0_pred_prob.shape) == 4:
+                    x0_pred_token = x0_pred_prob[batch_idx, row, col].unsqueeze(0)
+                # If x0_pred_prob is in [batch, flattened, classes] format
+                elif len(x0_pred_prob.shape) == 3:
+                    x0_pred_token = x0_pred_prob[batch_idx, idx_item].unsqueeze(0)
+                
+                # Compute posterior
+                x_t_target_prob_part_1 = torch.matmul(xt_token, Q_t.permute((1, 0)).contiguous())
+                x_t_target_prob_part_2 = Q_bar_t_target[0]
+                x_t_target_prob_part_3 = (Q_bar_t_source[0] * xt_token).sum(dim=-1, keepdim=True)
+                
+                x_t_target_prob = (x_t_target_prob_part_1 * x_t_target_prob_part_2) / x_t_target_prob_part_3
+                
+                sum_x_t_target_prob = x_t_target_prob[..., 1] * x0_pred_token[..., 0]
+                x_t_target_prob_part_2_new = Q_bar_t_target[1]
+                x_t_target_prob_part_3_new = (Q_bar_t_source[1] * xt_token).sum(dim=-1, keepdim=True)
+                
+                x_t_source_prob_new = (x_t_target_prob_part_1 * x_t_target_prob_part_2_new) / x_t_target_prob_part_3_new
+                
+                sum_x_t_target_prob += x_t_source_prob_new[..., 1] * x0_pred_token[..., 1]
+                
+                # Sample or set deterministically based on target noise level
+                if t2 > 0:
+                    sample = torch.bernoulli(sum_x_t_target_prob.clamp(0, 1))
+                else:
+                    sample = sum_x_t_target_prob.clamp(min=0)
+                
+                # Update the token in the correct position in the 3D tensor
+                new_xt[batch_idx, row, col] = sample.item()
+                valid_updates += 1
+            
+    else:
+        # For sparse or 1D tensors, use the original implementation
+        new_xt = xt.clone()
+        
+        # Convert xt to one-hot representation
+        xt_onehot = F.one_hot(xt.long(), num_classes=2).float()
+        if not is_sparse and len(xt.shape) > 1:
+            xt_shape = xt_onehot.shape
+            xt_onehot = xt_onehot.reshape(x0_pred_prob.shape)
+        
+        # Filter token indices that are within bounds
+        valid_indices = [idx.item() for idx in token_indices if idx.item() < xt.shape[0]]
+        
+        # Process each token with its specific noise levels
+        for idx in valid_indices:
+            t1 = from_noise_levels[idx].item()
+            t2 = to_noise_levels[idx].item()
+            
+            # If both noise levels are the same, skip this token
+            if t1 == t2:
+                continue
+            
+            # Get Q matrices for this token's specific noise levels
+            if t2 > 0:
+                Q_t = np.linalg.inv(diffusion.Q_bar[t2]) @ diffusion.Q_bar[t1]
+                Q_t = torch.from_numpy(Q_t).float().to(device)
+            else:
+                Q_t = torch.eye(2).float().to(device)
+            
+            Q_bar_t_source = torch.from_numpy(diffusion.Q_bar[t1]).float().to(device)
+            Q_bar_t_target = torch.from_numpy(diffusion.Q_bar[t2]).float().to(device)
+            
+            # Get this token's current value and model prediction
+            if is_sparse:
+                xt_token = xt_onehot[idx].unsqueeze(0)
+                x0_pred_token_idx = min(idx // x0_pred_prob.shape[1], x0_pred_prob.shape[0] - 1)
+                x0_pred_subidx = min(idx % x0_pred_prob.shape[1], x0_pred_prob.shape[1] - 1)
+                x0_pred_token = x0_pred_prob[0, x0_pred_token_idx, x0_pred_subidx].unsqueeze(0)
+            else:
+                flat_idx = idx
+                # Convert flat index to multi-dimensional index
+                b_size, h, w, _ = x0_pred_prob.shape
+                b = min(flat_idx // (h * w), b_size - 1)
+                remainder = flat_idx % (h * w)
+                i = min(remainder // w, h - 1)
+                j = min(remainder % w, w - 1)
+                xt_token = xt_onehot[b, i, j].unsqueeze(0)
+                x0_pred_token = x0_pred_prob[b, i, j].unsqueeze(0)
+            
+            # Compute posterior
+            x_t_target_prob_part_1 = torch.matmul(xt_token, Q_t.permute((1, 0)).contiguous())
+            x_t_target_prob_part_2 = Q_bar_t_target[0]
+            x_t_target_prob_part_3 = (Q_bar_t_source[0] * xt_token).sum(dim=-1, keepdim=True)
+            
+            x_t_target_prob = (x_t_target_prob_part_1 * x_t_target_prob_part_2) / x_t_target_prob_part_3
+            
+            sum_x_t_target_prob = x_t_target_prob[..., 1] * x0_pred_token[..., 0]
+            x_t_target_prob_part_2_new = Q_bar_t_target[1]
+            x_t_target_prob_part_3_new = (Q_bar_t_source[1] * xt_token).sum(dim=-1, keepdim=True)
+            
+            x_t_source_prob_new = (x_t_target_prob_part_1 * x_t_target_prob_part_2_new) / x_t_target_prob_part_3_new
+            
+            sum_x_t_target_prob += x_t_source_prob_new[..., 1] * x0_pred_token[..., 1]
+            
+            # Sample or set deterministically based on target noise level
+            if t2 > 0:
+                sample = torch.bernoulli(sum_x_t_target_prob.clamp(0, 1))
+            else:
+                sample = sum_x_t_target_prob.clamp(min=0)
+            
+            # Update the token in the new_xt tensor (make sure idx is within bounds)
+            if idx < new_xt.shape[0]:
+                new_xt[idx] = sample.item()
     
     return new_xt
 

@@ -4,8 +4,8 @@
 #SBATCH --error=/home/mananaga/projects/logs/difusco/%j/difusco.out
 #SBATCH --time=72:00:00
 #SBATCH --partition=preempt
-#SBATCH --gres=gpu:8
-#SBATCH --mem=128G
+#SBATCH --gres=gpu:1
+#SBATCH --mem=32G
 #SBATCH -c 4
 #SBATCH --hint=nomultithread
 
@@ -26,7 +26,7 @@ TEST_DATASET="${CONVERTED_DATA_DIR}/tsp${NUM_NODES}_frontierco_test.txt"
 
 # Setup environment
 export PYTHONPATH="$PWD:$PYTHONPATH"
-export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
+export CUDA_VISIBLE_DEVICES=0
 
 # Set Weights & Biases configuration
 export WANDB_ENTITY="mananaga-carnegie-mellon-university"
@@ -54,7 +54,7 @@ fi
 echo "Starting DIFUSCO training..."
 python -u difusco/train.py \
   --task "tsp" \
-  --wandb_logger_name "tsp_diffusion_graph_categorical_tsp${NUM_NODES}_frontierco" \
+  --wandb_logger_name "tsp_diffusion_graph_categorical_tsp${NUM_NODES}_frontierco_singlegpu" \
   --wandb_entity "mananaga-carnegie-mellon-university" \
   --diffusion_type "categorical" \
   --use_diffusion_forcing \
@@ -69,7 +69,7 @@ python -u difusco/train.py \
   --training_split "${TRAIN_DATASET}" \
   --validation_split "${VALID_DATASET}" \
   --test_split "${TEST_DATASET}" \
-  --batch_size 64 \
+  --batch_size 16 \
   --num_epochs 50 \
   --validation_examples 8 \
   --inference_schedule "cosine" \
