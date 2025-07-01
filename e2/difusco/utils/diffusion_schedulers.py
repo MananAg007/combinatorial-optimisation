@@ -78,11 +78,15 @@ class CategoricalDiffusion(object):
     offset = 0.008
     return np.cos(math.pi * 0.5 * (t / self.T + offset) / (1 + offset)) ** 2
 
-  def sample(self, x0_onehot, t):
-    # Select noise scales
-    Q_bar = torch.from_numpy(self.Q_bar[t]).float().to(x0_onehot.device)
-    xt = torch.matmul(x0_onehot, Q_bar.reshape((Q_bar.shape[0], 1, 2, 2)))
-    return torch.bernoulli(xt[..., 1].clamp(0, 1))
+  def sample(self, x0_onehot: torch.Tensor, t: torch.Tensor):
+    """
+    x0_onehot : [..., 2]           # e.g. [B,N,N,2]
+    t         : [... ]             # same leading shape, ints in [0,T)
+    returns   : [..., 2]
+    """
+    # Convert numpy array to torch tensor with the same dtype as x0_onehot
+    Q_bar = torch.tensor(self.Q_bar[t], device=x0_onehot.device, dtype=x0_onehot.dtype)
+    return torch.einsum('...c,...cd->...d', x0_onehot, Q_bar)
 
 
 class DiffusionForcing:
