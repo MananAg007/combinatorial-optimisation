@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=df.e1.10
+#SBATCH --job-name=dfco.e2
 #SBATCH --output=/home/mananaga/projects/logs/difusco/%j/difusco.out
 #SBATCH --error=/home/mananaga/projects/logs/difusco/%j/difusco.out
 #SBATCH --time=72:00:00
@@ -14,7 +14,7 @@ source ~/.bashrc
 conda activate difusco_2_fixed
 
 # Set working directories
-DIFUSCO_DIR="/home/mananaga/projects/combinatorial-optimisation/e1"
+DIFUSCO_DIR="/home/mananaga/projects/combinatorial-optimisation/e2"
 
 # Set node count for consistency with generate_tsp_end_to_end.sh
 NUM_NODES=50
@@ -69,6 +69,4 @@ python -u difusco/train.py \
   --num_epochs 50 \
   --validation_examples 8 \
   --inference_schedule "cosine" \
-  --inference_diffusion_steps 50 \
-  --train_constraint_weight 10.0 \
-  --sample_constraint_weight 0.0
+  --inference_diffusion_steps 50

@@ -14,7 +14,7 @@ source ~/.bashrc
 conda activate difusco_2_fixed
 
 # Set working directories
-DIFUSCO_DIR="/home/mananaga/projects/combinatorial-optimisation/$1"
+DIFUSCO_DIR="/home/mananaga/projects/combinatorial-optimisation/e0"
 
 # Set node count for consistency with generate_tsp_end_to_end.sh
 NUM_NODES=50
